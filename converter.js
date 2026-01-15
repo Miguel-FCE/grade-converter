@@ -1238,10 +1238,3 @@ async function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
-```
-
----
-
-## **Your correct CDN URL should be:**
-```
-https://cdn.jsdelivr.net/gh/Miguel-FCE/grade-converter@main/converter.js
