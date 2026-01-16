@@ -2,7 +2,7 @@
 const CONFIG = {
     apiKey: 'AIzaSyBbulks6r4-Bd1baf8v-b0Fx-5zZngBlIo',
     spreadsheetId: '11l_J840GhoTlVfGormRLQhm_Qe2_SmpFibVEO5WFKik',
-    requirementsRange: 'Sheet1!A:Z', // Updated to include preferred subjects columns
+    requirementsRange: 'Sheet1!A:AA', // Updated to include AP_Min_Count_With_SAT
     alevelsRange: 'A levels!A:A',
     ibRange: 'IBs!A:A',
     apRange: 'APs!A:A',
@@ -455,7 +455,7 @@ function extractRequiredSubjects(reqString) {
 
 function checkPreferredSubjects(preferredString, minPreferred, userSubjects) {
     /**
-     * NEW FUNCTION: Check if user meets preferred subjects requirement
+     * Check if user meets preferred subjects requirement
      * 
      * @param preferredString - Either "UCL" or custom subject list
      * @param minPreferred - Minimum number of preferred subjects needed
@@ -565,7 +565,7 @@ function matchALevels(userProfile, course) {
         return { match: 'possible', reason: gradeCheck.reason };
     }
     
-    // 4. NEW: Check preferred subjects (e.g., UCL preferred subjects)
+    // 4. Check preferred subjects (e.g., UCL preferred subjects)
     if (course.AL_Preferred_Subjects && course.AL_Min_Preferred) {
         const preferredCheck = checkPreferredSubjects(
             course.AL_Preferred_Subjects,
@@ -641,7 +641,7 @@ function matchIB(userProfile, course) {
 }
 
 function matchAP(userProfile, course) {
-    // 0. Check if course has NO specific requirements - apply subject profile filter
+    // 0. Check subject profile compatibility
     const hasNoSpecificRequirements = !course.AP_Required_Subjects || course.AP_Required_Subjects.trim() === '';
     
     if (hasNoSpecificRequirements) {
@@ -651,19 +651,45 @@ function matchAP(userProfile, course) {
         }
     }
     
-    const minCount = parseInt(course.AP_Min_Count);
     const minGrade = parseInt(course.AP_Min_Grades);
+    
+    // NEW: Determine effective AP count requirement based on SAT
+    const hasSAT = userProfile.satScore && course.SAT_Min_Score && 
+                   userProfile.satScore >= parseInt(course.SAT_Min_Score);
+    
+    let effectiveAPCount;
+    
+    if (hasSAT && course.AP_Min_Count_With_SAT && course.AP_Min_Count_With_SAT.trim() !== '') {
+        // Student has qualifying SAT AND course has reduced AP count with SAT
+        effectiveAPCount = parseInt(course.AP_Min_Count_With_SAT);
+    } else {
+        // Use standard AP count
+        effectiveAPCount = parseInt(course.AP_Min_Count);
+    }
     
     // Count APs at required grade
     const qualifyingAPs = Object.values(userProfile.grades).filter(g => g >= minGrade).length;
     
-    // 1. Check if has enough APs OR has SAT
-    const hasSAT = userProfile.satScore && userProfile.satScore >= parseInt(course.SAT_Min_Score);
-    
-    if (qualifyingAPs < minCount && !hasSAT) {
+    // 1. Check if has enough APs (considering SAT adjustment)
+    if (qualifyingAPs < effectiveAPCount) {
+        // Build helpful error message
+        let reason = `Need ${course.AP_Min_Count} APs at grade ${minGrade}`;
+        
+        if (course.AP_Min_Count_With_SAT && course.AP_Min_Count_With_SAT.trim() !== '') {
+            reason += ` (or ${course.AP_Min_Count_With_SAT} APs with SAT ${course.SAT_Min_Score}+)`;
+        } else if (course.SAT_Min_Score) {
+            reason += ` or SAT ${course.SAT_Min_Score}+`;
+        }
+        
+        reason += ` - you have ${qualifyingAPs} qualifying APs`;
+        
+        if (userProfile.satScore) {
+            reason += ` and SAT ${userProfile.satScore}`;
+        }
+        
         return { 
             match: 'unlikely', 
-            reason: `Need ${minCount} APs at grade ${minGrade} or SAT ${course.SAT_Min_Score}+ (you have ${qualifyingAPs} qualifying APs${userProfile.satScore ? ` and SAT ${userProfile.satScore}` : ''})` 
+            reason: reason
         };
     }
     
@@ -675,7 +701,7 @@ function matchAP(userProfile, course) {
         return { match: 'unlikely', reason: subjectCheck.reason };
     }
     
-    // 3. Check if required subjects meet grade requirement (handles both mandatory and "if taken")
+    // 3. Check if required subjects meet grade requirement
     const requiredSubjects = extractRequiredSubjects(course.AP_Required_Subjects);
     
     if (course.AP_Required_Subjects) {
@@ -684,16 +710,12 @@ function matchAP(userProfile, course) {
         for (let reqGroup of requirements) {
             const subjects = reqGroup.split('|').map(s => s.trim());
             
-            // Check if ANY of these subjects are in user's profile
             const subjectsUserHas = subjects.filter(s => userProfile.subjects.includes(s));
             
             if (subjectsUserHas.length === 0) {
-                // User doesn't have ANY of these subjects
-                // They're required, so this is already caught by subjectCheck above
                 continue;
             }
             
-            // User HAS at least one → check grade
             let foundQualifying = false;
             
             for (let subject of subjectsUserHas) {
