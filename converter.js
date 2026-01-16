@@ -2,10 +2,11 @@
 const CONFIG = {
     apiKey: 'AIzaSyBbulks6r4-Bd1baf8v-b0Fx-5zZngBlIo',
     spreadsheetId: '11l_J840GhoTlVfGormRLQhm_Qe2_SmpFibVEO5WFKik',
-    requirementsRange: 'Sheet1!A:X', // Updated to include AL_Min_Grades_4 column
+    requirementsRange: 'Sheet1!A:Z', // Updated to include preferred subjects columns
     alevelsRange: 'A levels!A:A',
     ibRange: 'IBs!A:A',
-    apRange: 'APs!A:A'
+    apRange: 'APs!A:A',
+    uclPreferredRange: 'UCL_preferred_subject!A:A'
 };
 
 let allData = [];
@@ -17,6 +18,7 @@ let subjectLists = {
     ib: [],
     ap: []
 };
+let uclPreferredSubjects = [];
 let subjectCounter = 0;
 let fourthAlevelAdded = false;
 
@@ -48,6 +50,18 @@ function normalizeSubjectName(subject) {
         // AP normalizations
         'Calculus BC': 'Calculus BC',
         'Calculus AB': 'Calculus AB',
+        
+        // UCL-specific normalizations (variants map to base subject)
+        'Psychology A': 'Psychology',
+        'Psychology B': 'Psychology',
+        'Biology (Salters-Nuffield)': 'Biology',
+        'Biology (Human)': 'Biology',
+        'Chemistry (Nuffield)': 'Chemistry',
+        'Chemistry (Salters)': 'Chemistry',
+        'Physics (Advancing Physics)': 'Physics',
+        'Physics (Salters-Horners)': 'Physics',
+        'Mathematics (MEI)': 'Maths',
+        'Economics and Business (Nuffield)': 'Economics',
     };
     
     return normalizations[subject] || subject;
@@ -439,6 +453,67 @@ function extractRequiredSubjects(reqString) {
     return subjects;
 }
 
+function checkPreferredSubjects(preferredString, minPreferred, userSubjects) {
+    /**
+     * NEW FUNCTION: Check if user meets preferred subjects requirement
+     * 
+     * @param preferredString - Either "UCL" or custom subject list
+     * @param minPreferred - Minimum number of preferred subjects needed
+     * @param userSubjects - Array of user's subjects
+     * @return {match: boolean, reason: string, count: number}
+     */
+    
+    if (!preferredString || preferredString.trim() === '') {
+        return { match: true, count: 0 };
+    }
+    
+    if (!minPreferred || parseInt(minPreferred) === 0) {
+        return { match: true, count: 0 };
+    }
+    
+    const minRequired = parseInt(minPreferred);
+    let preferredList = [];
+    
+    // Determine which preferred list to use
+    if (preferredString.toUpperCase() === 'UCL') {
+        preferredList = uclPreferredSubjects;
+    } else {
+        // Custom preferred list (parse with | for OR logic)
+        preferredList = preferredString.split(/[;|]/).map(s => s.trim());
+    }
+    
+    // Count how many user subjects are in preferred list
+    const matchingPreferred = userSubjects.filter(subject => {
+        // Check exact match first
+        if (preferredList.includes(subject)) return true;
+        
+        // Check normalized match (for variants like Biology (Salters-Nuffield))
+        return preferredList.some(preferred => {
+            const normalizedPreferred = normalizeSubjectName(preferred);
+            const normalizedUser = normalizeSubjectName(subject);
+            return normalizedPreferred === normalizedUser;
+        });
+    });
+    
+    const count = matchingPreferred.length;
+    
+    if (count >= minRequired) {
+        return { 
+            match: true, 
+            count: count,
+            subjects: matchingPreferred 
+        };
+    } else {
+        const listName = preferredString.toUpperCase() === 'UCL' ? 'UCL preferred subjects' : 'preferred subjects';
+        return { 
+            match: false, 
+            count: count,
+            subjects: matchingPreferred,
+            reason: `Need ${minRequired} from ${listName} (you have ${count}: ${matchingPreferred.join(', ') || 'none'})` 
+        };
+    }
+}
+
 function matchALevels(userProfile, course) {
     // 0. Check if course has NO specific requirements - apply subject profile filter
     const hasNoSpecificRequirements = !course.AL_Required_Subjects || course.AL_Required_Subjects.trim() === '';
@@ -488,6 +563,20 @@ function matchALevels(userProfile, course) {
     
     if (!gradeCheck.match) {
         return { match: 'possible', reason: gradeCheck.reason };
+    }
+    
+    // 4. NEW: Check preferred subjects (e.g., UCL preferred subjects)
+    if (course.AL_Preferred_Subjects && course.AL_Min_Preferred) {
+        const preferredCheck = checkPreferredSubjects(
+            course.AL_Preferred_Subjects,
+            course.AL_Min_Preferred,
+            userProfile.subjects
+        );
+        
+        if (!preferredCheck.match) {
+            // Preferred subjects not met → downgrade to "possible" not "unlikely"
+            return { match: 'possible', reason: preferredCheck.reason };
+        }
     }
     
     return { match: 'strong', reason: 'Meets all requirements' };
@@ -800,6 +889,7 @@ async function loadSubjectLists() {
     const alevelsData = await fetchData(CONFIG.alevelsRange);
     const ibData = await fetchData(CONFIG.ibRange);
     const apData = await fetchData(CONFIG.apRange);
+    const uclData = await fetchData(CONFIG.uclPreferredRange);
 
     if (alevelsData) {
         subjectLists.alevels = alevelsData.slice(1).map(row => row[0]).filter(s => s);
@@ -809,6 +899,10 @@ async function loadSubjectLists() {
     }
     if (apData) {
         subjectLists.ap = apData.slice(1).map(row => row[0]).filter(s => s);
+    }
+    if (uclData) {
+        uclPreferredSubjects = uclData.slice(1).map(row => row[0]).filter(s => s);
+        console.log(`Loaded ${uclPreferredSubjects.length} UCL preferred subjects`);
     }
 
     // Initialize A-Levels with 3 subjects
